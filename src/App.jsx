@@ -358,6 +358,21 @@ export default function App() {
 
         {authErr&&<div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:14,padding:"16px 22px",marginBottom:22,textAlign:"left"}}><div style={{color:T.r,fontWeight:700,fontSize:15}}>⚠ {authErr}</div><div style={{color:T.m,fontSize:13,marginTop:6}}>ติดต่อผู้ดูแลระบบเพื่อขอสิทธิ์</div></div>}
 
+        {/* In-App Browser Detection */}
+        {(/Line|FBAN|FBAV|Instagram|Messenger/i.test(navigator.userAgent)) && (
+          <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:14,padding:"18px 22px",marginBottom:22,textAlign:"left"}}>
+            <div style={{color:"#92400E",fontWeight:700,fontSize:16,marginBottom:8}}>⚠️ เข้าสู่ระบบด้วย Google ไม่ได้ในแอป LINE / Messenger</div>
+            <div style={{color:"#78716C",fontSize:15,lineHeight:1.7,marginBottom:12}}>
+              เนื่องจาก Google ไม่อนุญาตให้ล็อกอินผ่านแอปแชท<br/>
+              กรุณาเปิดในเบราว์เซอร์ (Chrome, Safari) แทน
+            </div>
+            <div style={{color:"#92400E",fontSize:14,fontWeight:600,marginBottom:14,padding:"10px 14px",background:"#FEF3C7",borderRadius:10}}>
+              💡 <strong>วิธีทำ:</strong> กดจุด 3 จุด <strong>⋮</strong> มุมขวาบน → เลือก "<strong>เปิดใน Browser</strong>"
+            </div>
+            <button onClick={()=>{navigator.clipboard?.writeText(window.location.href);fire("คัดลอกลิงก์แล้ว — วางใน Chrome / Safari ได้เลย");}} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,width:"100%",padding:"14px",borderRadius:12,background:"#F59E0B",border:"none",color:"#fff",fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>📋 คัดลอกลิงก์</button>
+          </div>
+        )}
+
         <button onClick={gLogin} disabled={authLoading} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,width:"100%",padding:"16px",borderRadius:14,background:"#fff",border:`2px solid ${T.b}`,color:T.t,fontSize:17,fontWeight:700,cursor:authLoading?"wait":"pointer",opacity:authLoading?.6:1,fontFamily:"inherit",marginBottom:12,transition:"all .2s",boxShadow:T.shadow}} onMouseEnter={e=>{if(!authLoading){e.currentTarget.style.borderColor=T.a;e.currentTarget.style.boxShadow=T.shadowLg}}} onMouseLeave={e=>{e.currentTarget.style.borderColor=T.b;e.currentTarget.style.boxShadow=T.shadow}}>
           {authLoading ? <div style={{width:22,height:22,border:`3px solid ${T.a}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/> : <svg width="22" height="22" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>}
           {authLoading ? "กำลังตรวจสอบ..." : "เข้าสู่ระบบด้วย Google"}
