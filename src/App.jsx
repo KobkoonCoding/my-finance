@@ -84,7 +84,7 @@ const DEMO = [
 /* ═══════════════════════════════════════════════════════════
    SYNC ENGINE
    ═══════════════════════════════════════════════════════════ */
-function useSyncEngine(scriptUrl, interval, enabled, userEmail, onAuthFail) {
+function useSyncEngine(scriptUrl, interval, enabled, userEmail, token, onAuthFail) {
   const [data, setData] = useState([]);
   const [syncState, setSyncState] = useState("idle");
   const [lastSync, setLastSync] = useState(null);
@@ -99,15 +99,14 @@ function useSyncEngine(scriptUrl, interval, enabled, userEmail, onAuthFail) {
     if (!isReady) return;
     if (!silent) setSyncState("loading"); else setSyncState("syncing");
     try {
-      const needAuth = !authVerified.current && userEmail;
-      const url = needAuth
-        ? `${scriptUrl}?action=authAndRead&email=${encodeURIComponent(userEmail)}&t=${Date.now()}`
-        : `${scriptUrl}?action=read&t=${Date.now()}`;
-      const res = await fetch(url);
+      const cred = `${token ? `&token=${encodeURIComponent(token)}` : ""}${userEmail ? `&email=${encodeURIComponent(userEmail)}` : ""}`;
+      const needAuth = !authVerified.current && (token || userEmail);
+      const action = needAuth ? "authAndRead" : "read";
+      const res = await fetch(`${scriptUrl}?action=${action}${cred}&t=${Date.now()}`);
       const json = await res.json();
       if (!isMountedRef.current) return;
+      if (json && json.authorized === false) { onAuthFail?.(json.reason); return; }
       if (needAuth) {
-        if (json.authorized === false) { onAuthFail?.(userEmail); return; }
         authVerified.current = true;
         const rows = Array.isArray(json.data) ? json.data : [];
         setData(rows.map(r => ({ ...r, amount: Number(r.amount) || 0 })));
@@ -118,14 +117,14 @@ function useSyncEngine(scriptUrl, interval, enabled, userEmail, onAuthFail) {
     } catch (err) {
       if (isMountedRef.current) { setSyncState("error"); setError(err.message); }
     }
-  }, [scriptUrl, isReady, userEmail, onAuthFail]);
+  }, [scriptUrl, isReady, userEmail, token, onAuthFail]);
 
   const writeData = useCallback(async (action, payload, optimisticFn) => {
     if (!isReady) { if (optimisticFn) optimisticFn(setData); return true; }
     if (optimisticFn) optimisticFn(setData);
     setSyncState("syncing"); setChangeCount(c => c + 1);
     try {
-      const res = await fetch(scriptUrl, { method:"POST", body:JSON.stringify({ action, ...payload }), redirect:"follow" });
+      const res = await fetch(scriptUrl, { method:"POST", body:JSON.stringify({ action, token, email: userEmail, ...payload }), redirect:"follow" });
       let json; try { json = await res.json(); } catch { json = { success:true }; }
       if (isMountedRef.current) { setSyncState("synced"); setLastSync(new Date()); setError(null); setTimeout(() => fetchData(true), 1200); }
       return json?.success !== false;
@@ -133,7 +132,7 @@ function useSyncEngine(scriptUrl, interval, enabled, userEmail, onAuthFail) {
       if (isMountedRef.current) { setSyncState("error"); setError(err.message); setTimeout(() => fetchData(true), 2000); }
       return false;
     }
-  }, [scriptUrl, isReady, fetchData]);
+  }, [scriptUrl, isReady, token, userEmail, fetchData]);
 
   useEffect(() => { isMountedRef.current = true; if (isReady) fetchData(); return () => { isMountedRef.current = false; }; }, [isReady]);
   useEffect(() => { if (!isReady || !interval) return; timerRef.current = setInterval(() => fetchData(true), interval * 1000); return () => clearInterval(timerRef.current); }, [isReady, interval, fetchData]);
@@ -157,6 +156,7 @@ export default function App() {
   // ── Auth State ──
   const saved = useRef((() => { try { return JSON.parse(localStorage.getItem("fin_session")); } catch { return null; } })());
   const [user, setUser] = useState(saved.current?.user || null);
+  const [token, setToken] = useState(saved.current?.token || null);
   const [isAuth, setIsAuth] = useState(!!saved.current?.user);
   const [authErr, setAuthErr] = useState(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -172,9 +172,15 @@ export default function App() {
   const warmedUp = useRef(false);
   useEffect(() => { if (!isAuth && !warmedUp.current && cfg.scriptUrl) { warmedUp.current = true; fetch(`${cfg.scriptUrl}?action=ping&t=${Date.now()}`).catch(() => {}); } }, [isAuth, cfg.scriptUrl]);
 
-  const onAuthFail = useCallback((email) => { setIsAuth(false); setAuthErr(`${email} ไม่ได้รับอนุญาต — ติดต่อเจ้าของ Sheet เพื่อเพิ่มสิทธิ์`); localStorage.removeItem("fin_session"); }, []);
+  const onAuthFail = useCallback((reason) => {
+    setIsAuth(false); setToken(null);
+    setAuthErr(reason === "not an editor"
+      ? "บัญชีนี้ไม่ได้รับอนุญาต — ติดต่อเจ้าของ Sheet เพื่อเพิ่มสิทธิ์"
+      : "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง");
+    localStorage.removeItem("fin_session");
+  }, []);
 
-  const sync = useSyncEngine(cfg.scriptUrl, cfg.syncInterval, isAuth && !demo, user?.email, onAuthFail);
+  const sync = useSyncEngine(cfg.scriptUrl, cfg.syncInterval, isAuth && !demo, user?.email, token, onAuthFail);
   const tx = demo ? DEMO : sync.data;
 
   // ── UI State ──
@@ -201,18 +207,20 @@ export default function App() {
         client_id: cfg.clientId, scope: "email profile",
         callback: (tok) => {
           setAuthLoading(true);
-          fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${tok.access_token}` } })
+          const accessToken = tok.access_token;
+          setToken(accessToken);
+          fetch("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } })
             .then(r => r.json()).then(async (info) => {
               setUser(info);
               setAuthLoading(false);
               setAuthChecking(true);
               setAuthErr(null);
               try {
-                const res = await fetch(`${cfg.scriptUrl}?action=authAndRead&email=${encodeURIComponent(info.email)}&t=${Date.now()}`);
+                const res = await fetch(`${cfg.scriptUrl}?action=authAndRead&token=${encodeURIComponent(accessToken)}&email=${encodeURIComponent(info.email)}&t=${Date.now()}`);
                 const result = await res.json();
                 if (result.authorized) {
                   setIsAuth(true);
-                  localStorage.setItem("fin_session", JSON.stringify({ user: info, ts: Date.now() }));
+                  localStorage.setItem("fin_session", JSON.stringify({ user: info, token: accessToken, ts: Date.now() }));
                   // ส่งข้อมูลที่ได้มาให้ sync engine ใช้เลย ไม่ต้อง fetch ซ้ำ
                   if (Array.isArray(result.data)) {
                     sync.setData(result.data.map(r => ({ ...r, amount: Number(r.amount) || 0 })));
@@ -232,7 +240,7 @@ export default function App() {
   }, [cfg, sync]);
 
   const enterDemo = () => { setDemo(true); setIsAuth(true); setUser({name:"ทดลองใช้งาน",email:"demo@example.com"}); fire("โหมด Demo — ข้อมูลไม่ได้บันทึก","info"); };
-  const logout = () => { setUser(null); setIsAuth(false); setDemo(false); setAuthErr(null); localStorage.removeItem("fin_session"); };
+  const logout = () => { setUser(null); setToken(null); setIsAuth(false); setDemo(false); setAuthErr(null); localStorage.removeItem("fin_session"); };
 
   // ── Stats ──
   const budget = DEFAULT_CONFIG.BUDGET;
