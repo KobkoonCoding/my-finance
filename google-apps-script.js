@@ -13,6 +13,12 @@
 
 const SHEET_NAME = "Sheet1";
 
+// ── รายชื่ออีเมลที่อนุญาตเสมอ (เจ้าของ/แอดมิน) ──
+// ใช้เป็น safety net เผื่อ getOwner() ตรวจไม่เจอ (เช่น Sheet อยู่ใน Shared Drive / Workspace)
+// คนอื่นที่จะให้เข้าได้ → แค่ "แชร์ Sheet เป็น Editor" ตามปกติ ระบบเช็คจาก getEditors() ให้อัตโนมัติ
+// 👇 เปลี่ยนเป็นอีเมลเจ้าของจริง (ใส่ได้หลายอัน เช่น ["a@gmail.com","b@gmail.com"])
+const ALLOWED_EMAILS = ["YOUR-OWNER-EMAIL@gmail.com"];
+
 // ── verify Google access token → ต้องเป็น owner/editor ของ Sheet ──
 function verifyEditor(token) {
   if (!token) return { ok: false, reason: "no token" };
@@ -37,12 +43,13 @@ function verifyEditor(token) {
     if (!email) return { ok: false, reason: "no email in token" };
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const owner = ss.getOwner();
-    const isOwner = owner && owner.getEmail().toLowerCase() === email;
-    const isEditor = isOwner || ss.getEditors().some(e => e.getEmail().toLowerCase() === email);
-    if (!isEditor) return { ok: false, reason: "not an editor" };
+    const isAllowed = ALLOWED_EMAILS.map(x => String(x).toLowerCase()).indexOf(email) !== -1;
+    let isOwner = false, isEditor = false;
+    try { const owner = ss.getOwner(); isOwner = !!(owner && owner.getEmail().toLowerCase() === email); } catch (e) {}
+    try { isEditor = ss.getEditors().some(ed => ed.getEmail().toLowerCase() === email); } catch (e) {}
+    if (!(isAllowed || isOwner || isEditor)) return { ok: false, reason: "not an editor" };
 
-    const result = { ok: true, email: email, role: isOwner ? "owner" : "editor" };
+    const result = { ok: true, email: email, role: isOwner ? "owner" : (isAllowed ? "admin" : "editor") };
     cache.put(cacheKey, JSON.stringify(result), 300); // 5 นาที
     return result;
   } catch (err) {
