@@ -1,8 +1,22 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import {
-  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, AreaChart, Area, CartesianGrid, Legend
-} from "recharts";
+import { useState, useMemo, useCallback, useEffect, useRef, lazy, Suspense } from "react";
+
+// Charts (recharts) ถูกแยกเป็น chunk ต่างหาก โหลดเฉพาะตอนเข้า dashboard
+const Charts = lazy(() => import("./Charts.jsx"));
+
+/* ═══════════════════════════════════════════════════════════
+   SVG LINE ICONS — คมและพรีเมียมกว่า emoji, inherit สีผ่าน stroke
+   ═══════════════════════════════════════════════════════════ */
+const ICON_PATHS = {
+  grid: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></>,
+  list: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3.5" y1="6" x2="3.51" y2="6"/><line x1="3.5" y1="12" x2="3.51" y2="12"/><line x1="3.5" y1="18" x2="3.51" y2="18"/></>,
+  pie: <><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></>,
+  trend: <><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></>,
+  plus: <><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>,
+  trash: <><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></>,
+};
+const Icon = ({ name, size = 22, color = "currentColor", sw = 2 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICON_PATHS[name]}</svg>
+);
 
 /* ═══════════════════════════════════════════════════════════
    CONFIGURATION
@@ -43,7 +57,7 @@ const T = {
   r:"#DC2626",    rs:"#FEF2F2",
   am:"#D97706",   ams:"#FFFBEB",
   bl:"#0284C7",   bls:"#F0F9FF",
-  t:"#1E293B",    m:"#64748B",    d:"#94A3B8",
+  t:"#1E293B",    m:"#475569",    d:"#64748B",
   card:"#FFFFFF", shadow:"0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04)",
   shadowLg:"0 4px 12px rgba(0,0,0,.08)",
 };
@@ -172,6 +186,7 @@ export default function App() {
   const [fCat, setFCat] = useState("all");
   const [toast, setToast] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
   const [localTx, setLocalTx] = useState(DEMO);
   const activeTx = demo ? localTx : (tx.length ? tx : []);
   const formInit = { type:"เบิก", person:"", date:new Date().toISOString().split("T")[0], category:"training", item:"", amount:"", note:"" };
@@ -290,10 +305,11 @@ export default function App() {
     resetForm();
   };
   const edit = (t) => { setForm({type:t.type,person:t.person,date:t.date,category:t.category||"other",item:t.item,amount:t.amount,note:t.note||""}); setEditId(t.id); setShowForm(true); setTab("transactions"); setMenuOpen(false); };
-  const del = async (id) => {
+  const doDelete = async (id) => {
     if (demo) setLocalTx(p => p.filter(t => t.id !== id));
     else await sync.writeData("delete", { id }, set => set(p => p.filter(t => t.id !== id)));
     fire("ลบรายการแล้ว");
+    setConfirmDel(null);
   };
 
   // ── Styles ──
@@ -307,7 +323,6 @@ export default function App() {
     </span>
   );
   const CatB = ({id}) => { const c=CM[id]||CM.other; return <span style={{background:c.color+"18",color:c.color,padding:"5px 12px",borderRadius:8,fontSize:13,fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}>{c.icon} {c.label}</span>; };
-  const CTip = ({active,payload}) => { if(!active||!payload?.length)return null; return <div style={{background:"#fff",border:`1px solid ${T.b}`,borderRadius:12,padding:"12px 16px",boxShadow:T.shadowLg}}>{payload.map((p,i)=><div key={i} style={{color:p.color||T.t,fontSize:14,fontWeight:700}}>{p.name}: ฿{fmt(p.value)}</div>)}</div>; };
 
   const SyncDot = () => {
     const colors = {idle:T.d,loading:T.am,syncing:T.bl,synced:T.g,error:T.r};
@@ -387,55 +402,97 @@ export default function App() {
      MAIN DASHBOARD
      ═══════════════════════════════════════════════════════ */
   return (
-    <div style={{fontFamily:"'Noto Sans Thai',system-ui,sans-serif",background:T.bg,color:T.t,minHeight:"100vh"}}>
+    <div style={{fontFamily:"'Noto Sans Thai',system-ui,sans-serif",background:T.bg,color:T.t,minHeight:"100vh",fontVariantNumeric:"tabular-nums lining-nums"}}>
       <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
 
       {toast&&<div style={{position:"fixed",top:16,right:16,left:mob?16:"auto",zIndex:9999,background:toast.type==="error"?"#FEF2F2":"#ECFDF5",border:`1px solid ${toast.type==="error"?"#FECACA":"#A7F3D0"}`,borderRadius:12,padding:"14px 20px",color:toast.type==="error"?T.r:T.g,fontSize:15,fontWeight:700,boxShadow:T.shadowLg,animation:"slideIn .3s ease"}}>{toast.msg}</div>}
+
+      {/* Custom delete confirm modal (เข้าธีม แทน window.confirm) */}
+      {confirmDel&&<div onClick={()=>setConfirmDel(null)} style={{position:"fixed",inset:0,zIndex:9998,background:"rgba(15,23,42,.5)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,animation:"fadeIn .15s ease"}}>
+        <div onClick={e=>e.stopPropagation()} role="alertdialog" aria-modal="true" style={{background:"#fff",borderRadius:18,padding:24,maxWidth:380,width:"100%",boxShadow:T.shadowLg,animation:"slideIn .2s ease"}}>
+          <div style={{width:52,height:52,borderRadius:14,background:T.rs,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}><Icon name="trash" size={26} color={T.r}/></div>
+          <div style={{fontSize:19,fontWeight:800,textAlign:"center",marginBottom:6,color:T.t}}>ลบรายการนี้?</div>
+          <div style={{fontSize:14,color:T.m,textAlign:"center",marginBottom:4}}>{confirmDel.item||"—"}</div>
+          <div style={{fontSize:15,fontWeight:700,textAlign:"center",marginBottom:20,color:confirmDel.type==="เบิก"?T.r:T.g}}>{confirmDel.type} ฿{fmt(confirmDel.amount)} · {confirmDel.person}</div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setConfirmDel(null)} style={btnStyle("transparent",{flex:1,border:`1.5px solid ${T.b}`,color:T.m,minHeight:48})}>ยกเลิก</button>
+            <button onClick={()=>doDelete(confirmDel.id)} style={btnStyle(T.r,{flex:1,minHeight:48})}>ลบรายการ</button>
+          </div>
+        </div>
+      </div>}
 
       {/* HEADER */}
       <header style={{background:"#FFFFFFEE",backdropFilter:"blur(12px)",borderBottom:`1px solid ${T.b}`,padding:mob?"0 16px":"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,height:mob?60:68,gap:12}}>
         <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
           <div style={{width:38,height:38,borderRadius:12,background:`linear-gradient(135deg,${T.a},${T.a2})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,color:"#fff",flexShrink:0}}>฿</div>
-          {!mob&&<div style={{minWidth:0}}><div style={{fontSize:16,fontWeight:800,color:T.t}}>{cfg.projectName}</div><SyncDot/></div>}
+          {!mob
+            ? <div style={{minWidth:0}}><div style={{fontSize:16,fontWeight:800,color:T.t,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:260}}>{cfg.projectName}</div><SyncDot/></div>
+            : <div style={{minWidth:0}}><SyncDot/></div>}
         </div>
 
         {!mob&&<nav style={{display:"flex",gap:4,background:T.s3,borderRadius:12,padding:4}}>
           {[{k:"dashboard",l:"แดชบอร์ด"},{k:"transactions",l:"รายการ"},{k:"budget",l:"งบหมวดหมู่"},{k:"analytics",l:"วิเคราะห์"}].map(n=>(
-            <button key={n.k} onClick={()=>setTab(n.k)} style={{padding:"10px 20px",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,background:tab===n.k?T.a:"transparent",color:tab===n.k?"#fff":T.m,border:"none",fontFamily:"inherit",transition:"all .15s"}}>{n.l}</button>
+            <button key={n.k} onClick={()=>setTab(n.k)} style={{padding:"10px 20px",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,background:tab===n.k?T.a:"transparent",color:tab===n.k?"#fff":T.m,border:"none",fontFamily:"inherit",transition:"all .15s",whiteSpace:"nowrap"}}>{n.l}</button>
           ))}
         </nav>}
 
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           {!mob && sync.isReady && <button onClick={()=>sync.fetchData()} style={btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.m,padding:"8px 16px",fontSize:14})}>↻ Refresh</button>}
           {!mob && cfg.sheetUrl && <a href={cfg.sheetUrl} target="_blank" rel="noopener" style={{...btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.bl,padding:"8px 16px",fontSize:14,textDecoration:"none",display:"inline-block"})}}>📊 Sheet</a>}
-          <button onClick={()=>{setShowForm(true);setTab("transactions");setMenuOpen(false);}} style={btnStyle(T.a,{padding:"10px 20px",fontSize:15})}>+ เพิ่มรายการ</button>
+          {!mob&&<button onClick={()=>{setShowForm(true);setTab("transactions");setMenuOpen(false);}} style={btnStyle(T.a,{padding:"10px 20px",fontSize:15})}>+ เพิ่มรายการ</button>}
           {!mob&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px 6px 6px",background:T.s3,borderRadius:12,border:`1px solid ${T.b}`}}>
             {user?.picture?<img src={user.picture} style={{width:32,height:32,borderRadius:10}} referrerPolicy="no-referrer"/>:<div style={{width:32,height:32,borderRadius:10,background:T.a,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:"#fff"}}>{user?.name?.[0]}</div>}
             <div><div style={{fontSize:13,fontWeight:700}}>{user?.name}</div><div style={{fontSize:11,color:T.d}}>{user?.email}</div></div>
           </div>}
-          <button onClick={logout} style={{background:"none",border:`1.5px solid ${T.b}`,borderRadius:10,padding:"6px 12px",color:T.m,cursor:"pointer",fontSize:14,fontWeight:600,fontFamily:"inherit"}}>ออก</button>
-          {mob&&<button onClick={()=>setMenuOpen(!menuOpen)} style={{background:"none",border:"none",color:T.m,cursor:"pointer",fontSize:24,padding:4}}>☰</button>}
+          {!mob&&<button onClick={logout} style={{background:"none",border:`1.5px solid ${T.b}`,borderRadius:10,padding:"6px 12px",color:T.m,cursor:"pointer",fontSize:14,fontWeight:600,fontFamily:"inherit"}}>ออก</button>}
+          {mob&&<button onClick={()=>setMenuOpen(!menuOpen)} aria-label="เมนู" style={{background:"none",border:`1.5px solid ${T.b}`,borderRadius:10,color:T.m,cursor:"pointer",fontSize:22,width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>☰</button>}
         </div>
       </header>
 
-      {/* Mobile menu */}
-      {mob&&menuOpen&&<div style={{position:"fixed",top:60,left:0,right:0,background:"#fff",borderBottom:`1px solid ${T.b}`,zIndex:99,padding:12,display:"flex",flexDirection:"column",gap:4,boxShadow:T.shadowLg}}>
-        {[{k:"dashboard",l:"แดชบอร์ด"},{k:"transactions",l:"รายการ"},{k:"budget",l:"งบหมวดหมู่"},{k:"analytics",l:"วิเคราะห์"}].map(n=>(
-          <button key={n.k} onClick={()=>{setTab(n.k);setMenuOpen(false);}} style={{padding:"14px 18px",borderRadius:12,background:tab===n.k?T.a:"transparent",color:tab===n.k?"#fff":T.m,border:"none",fontSize:16,fontWeight:700,fontFamily:"inherit",textAlign:"left",cursor:"pointer"}}>{n.l}</button>
-        ))}
-        <div style={{padding:"10px 18px"}}><SyncDot/></div>
-        <div style={{display:"flex",gap:8,padding:"4px 12px"}}>
-          {sync.isReady&&<button onClick={()=>{sync.fetchData();setMenuOpen(false);}} style={btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.m,fontSize:14,flex:1})}>↻ Refresh</button>}
-          {cfg.sheetUrl&&<a href={cfg.sheetUrl} target="_blank" rel="noopener" style={{...btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.bl,fontSize:14,flex:1,textDecoration:"none",textAlign:"center"})}}>📊 Sheet</a>}
+      {/* Mobile dropdown — secondary actions only (เมนูหลักย้ายไป bottom nav) */}
+      {mob&&menuOpen&&<>
+        <div onClick={()=>setMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:98,background:"rgba(15,23,42,.25)"}}/>
+        <div style={{position:"fixed",top:60,left:0,right:0,background:"#fff",borderBottom:`1px solid ${T.b}`,zIndex:99,padding:12,display:"flex",flexDirection:"column",gap:8,boxShadow:T.shadowLg}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:T.s3,borderRadius:12}}>
+            {user?.picture?<img src={user.picture} style={{width:38,height:38,borderRadius:10}} referrerPolicy="no-referrer"/>:<div style={{width:38,height:38,borderRadius:10,background:T.a,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:800,color:"#fff"}}>{user?.name?.[0]}</div>}
+            <div style={{minWidth:0}}><div style={{fontSize:15,fontWeight:700}}>{user?.name}</div><div style={{fontSize:12,color:T.d,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user?.email}</div></div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {sync.isReady&&<button onClick={()=>{sync.fetchData();setMenuOpen(false);}} style={btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.m,fontSize:15,flex:1,minHeight:48})}>↻ รีเฟรช</button>}
+            {cfg.sheetUrl&&<a href={cfg.sheetUrl} target="_blank" rel="noopener" style={{...btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.bl,fontSize:15,flex:1,textDecoration:"none",minHeight:48,display:"flex",alignItems:"center",justifyContent:"center"})}}>📊 Sheet</a>}
+          </div>
+          <button onClick={()=>{logout();setMenuOpen(false);}} style={btnStyle("transparent",{border:`1.5px solid ${T.b}`,color:T.r,fontSize:15,minHeight:48})}>ออกจากระบบ</button>
         </div>
-      </div>}
+      </>}
 
-      <main style={{maxWidth:1400,margin:"0 auto",padding:mob?"16px":"24px 32px"}}>
+      {/* Mobile bottom navigation (thumb-zone, แทน hamburger) */}
+      {mob&&<nav style={{position:"fixed",left:0,right:0,bottom:0,zIndex:100,height:62,background:"#FFFFFF",borderTop:`1px solid ${T.b}`,display:"flex",justifyContent:"space-around",alignItems:"stretch",boxShadow:"0 -2px 14px rgba(0,0,0,.06)"}}>
+        {[{k:"dashboard",l:"แดชบอร์ด",i:"grid"},{k:"transactions",l:"รายการ",i:"list"},{k:"budget",l:"งบ",i:"pie"},{k:"analytics",l:"วิเคราะห์",i:"trend"}].map(n=>{
+          const on = tab===n.k;
+          return (
+            <button key={n.k} onClick={()=>{setTab(n.k);setMenuOpen(false);}} aria-label={n.l} aria-current={on?"page":undefined} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,background:"none",border:"none",borderTop:`3px solid ${on?T.a:"transparent"}`,cursor:"pointer",fontFamily:"inherit",padding:0,color:on?T.a:T.m}}>
+              <Icon name={n.i} size={22} color={on?T.a:T.m} sw={on?2.4:2}/>
+              <span style={{fontSize:11,fontWeight:on?800:600}}>{n.l}</span>
+            </button>
+          );
+        })}
+      </nav>}
 
-        {/* Loading */}
-        {!demo && sync.syncState==="loading" && activeTx.length===0 && <div style={{textAlign:"center",padding:80}}>
-          <div style={{width:48,height:48,border:`4px solid ${T.b}`,borderTopColor:T.a,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 20px"}}/>
-          <div style={{color:T.m,fontSize:18,fontWeight:600}}>กำลังโหลดข้อมูลจาก Google Sheet...</div>
+      {/* Mobile FAB — primary action (เพิ่มรายการ) อยู่ในระยะนิ้วโป้ง */}
+      {mob&&!showForm&&<button onClick={()=>{setShowForm(true);setTab("transactions");setMenuOpen(false);}} aria-label="เพิ่มรายการ" style={{position:"fixed",right:18,bottom:78,zIndex:101,width:58,height:58,borderRadius:"50%",background:`linear-gradient(135deg,${T.a},${T.a2})`,color:"#fff",border:"none",cursor:"pointer",boxShadow:`0 8px 22px ${T.a}66`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}><Icon name="plus" size={26} color="#fff" sw={2.5}/></button>}
+
+      <main style={{maxWidth:1400,margin:"0 auto",padding:mob?"16px 16px 92px":"24px 32px"}}>
+
+        {/* Loading — skeleton screen (รู้สึกเร็วกว่า spinner) */}
+        {!demo && sync.syncState==="loading" && activeTx.length===0 && <div aria-busy="true" aria-label="กำลังโหลด">
+          <div className="sk" style={{height:52,marginBottom:16}}/>
+          <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(4,1fr)",gap:mob?10:14,marginBottom:16}}>
+            {[0,1,2,3].map(i=><div key={i} style={{...card}}><div className="sk" style={{height:14,width:"55%",marginBottom:12}}/><div className="sk" style={{height:26,width:"80%"}}/></div>)}
+          </div>
+          <div className="sk" style={{height:64,marginBottom:16}}/>
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:14}}>
+            <div className="sk" style={{height:mob?220:280}}/><div className="sk" style={{height:mob?220:280}}/>
+          </div>
         </div>}
 
         {/* Sync error */}
@@ -451,12 +508,12 @@ export default function App() {
             <div style={{width:10,height:10,borderRadius:"50%",background:sc.c}}/><span style={{color:sc.c,fontWeight:700,fontSize:16}}>{sc.l} — ใช้งบ {stats.pct.toFixed(1)}%</span><span style={{color:T.m,fontSize:15,marginLeft:"auto"}}>คงเหลือ ฿{fmt(stats.rem)}</span>
           </div>
 
-          {/* Summary cards */}
+          {/* Summary cards — เน้น "คงเหลือ" เป็นพระเอก */}
           <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(4,1fr)",gap:mob?10:14,marginBottom:16}}>
-            {[{t:"งบทั้งหมด",v:budget,c:T.a},{t:"เบิกรวม",v:stats.tw,c:T.r},{t:"คืนรวม",v:stats.tr,c:T.g},{t:"คงเหลือ",v:stats.rem,c:stats.rem>=0?T.g:T.r}].map((k,i)=>(
-              <div key={i} style={{...card,transition:"box-shadow .2s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow=T.shadowLg} onMouseLeave={e=>e.currentTarget.style.boxShadow=T.shadow}>
-                <div style={{color:T.m,fontSize:14,fontWeight:600,marginBottom:6}}>{k.t}</div>
-                <div style={{fontSize:mob?20:26,fontWeight:800,color:k.c,letterSpacing:-.5}}>฿{fmt(k.v)}</div>
+            {[{t:"งบทั้งหมด",v:budget,c:T.a},{t:"เบิกรวม",v:stats.tw,c:T.r},{t:"คืนรวม",v:stats.tr,c:T.g},{t:"คงเหลือ",v:stats.rem,c:stats.rem>=0?T.g:T.r,hero:true}].map((k,i)=>(
+              <div key={i} style={{...card,transition:"box-shadow .2s",...(k.hero?{background:stats.rem>=0?T.gs:T.rs,border:`1.5px solid ${k.c}55`}:{})}} onMouseEnter={e=>e.currentTarget.style.boxShadow=T.shadowLg} onMouseLeave={e=>e.currentTarget.style.boxShadow=T.shadow}>
+                <div style={{color:k.hero?k.c:T.m,fontSize:14,fontWeight:k.hero?700:600,marginBottom:6,display:"flex",alignItems:"center",gap:5}}>{k.t}{k.hero&&<span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,background:sc.c+"1F",color:sc.c}}>{sc.l}</span>}</div>
+                <div style={{fontSize:mob?(k.hero?24:20):(k.hero?30:26),fontWeight:800,color:k.c,letterSpacing:-.5}}>฿{fmt(k.v)}</div>
               </div>
             ))}
           </div>
@@ -471,22 +528,23 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:14,marginBottom:16}}>
             <div style={card}>
               <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>งบคงเหลือตามเวลา</div>
-              <ResponsiveContainer width="100%" height={mob?200:240}>
-                <AreaChart data={balTime}><defs><linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.a} stopOpacity={.15}/><stop offset="100%" stopColor={T.a} stopOpacity={0}/></linearGradient></defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={T.b}/><XAxis dataKey="date" stroke={T.d} fontSize={12} tickLine={false}/><YAxis stroke={T.d} fontSize={12} tickLine={false} tickFormatter={v=>`${(v/1e6).toFixed(1)}M`}/><Tooltip content={<CTip/>}/><Area type="monotone" dataKey="balance" stroke={T.a} strokeWidth={2.5} fill="url(#gB)" name="คงเหลือ"/></AreaChart>
-              </ResponsiveContainer>
+              <Suspense fallback={<div className="sk" style={{height:mob?200:240}}/>}>
+                <Charts kind="balanceArea" data={balTime} mob={mob} T={T} fmt={fmt}/>
+              </Suspense>
             </div>
             <div style={card}>
-              <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>สัดส่วนหมวดหมู่</div>
-              <div style={{display:"flex",alignItems:"center",flexDirection:mob?"column":"row",gap:mob?12:0}}>
-                <ResponsiveContainer width={mob?"100%":"50%"} height={mob?180:240}><PieChart><Pie data={byCat} dataKey="value" cx="50%" cy="50%" outerRadius={mob?75:95} innerRadius={mob?38:48} paddingAngle={3} strokeWidth={0}>{byCat.map((c,i)=><Cell key={i} fill={c.color}/>)}</Pie><Tooltip content={<CTip/>}/></PieChart></ResponsiveContainer>
-                <div style={{flex:1,width:mob?"100%":"auto"}}>{byCat.map(c=>(
-                  <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-                    <div style={{width:14,height:14,borderRadius:4,background:c.color,flexShrink:0}}/>
-                    <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:600}}>{c.name}</div><div style={{fontSize:13,color:T.m}}>฿{fmt(c.value)}</div></div>
-                  </div>
-                ))}</div>
-              </div>
+              <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>สัดส่วนหมวดหมู่ (เบิก)</div>
+              {byCat.length===0
+                ? <div style={{textAlign:"center",padding:40,color:T.d,fontSize:15}}>ยังไม่มีรายการเบิก</div>
+                : <div style={{display:"flex",flexDirection:"column",gap:12}}>{(()=>{const mx=Math.max(...byCat.map(x=>x.value),1);return byCat.map(c=>(
+                    <div key={c.id}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5,gap:8}}>
+                        <span style={{fontSize:14,fontWeight:600,color:T.t,display:"flex",alignItems:"center",gap:6,minWidth:0}}><span style={{flexShrink:0}}>{c.icon}</span><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span></span>
+                        <span className="tnum" style={{fontSize:14,fontWeight:700,color:T.t,flexShrink:0}}>฿{fmt(c.value)}</span>
+                      </div>
+                      <div style={{width:"100%",height:9,background:T.s3,borderRadius:5,overflow:"hidden"}}><div style={{width:`${(c.value/mx)*100}%`,height:"100%",background:c.color,borderRadius:5,transition:"width .5s ease"}}/></div>
+                    </div>
+                  ));})()}</div>}
             </div>
           </div>
 
@@ -502,7 +560,12 @@ export default function App() {
                 <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:18,fontWeight:800,color:t.type==="เบิก"?T.r:T.g}}>{t.type==="เบิก"?"−":"+"}{fmt(t.amount)}</div><div style={{fontSize:13,color:T.d}}>{t.date}</div></div>
               </div>
             ))}
-            {activeTx.length===0&&<div style={{textAlign:"center",padding:40,color:T.d,fontSize:16}}>ยังไม่มีรายการ</div>}
+            {activeTx.length===0&&<div style={{textAlign:"center",padding:"40px 20px"}}>
+              <div style={{fontSize:40,marginBottom:8}}>🧾</div>
+              <div style={{color:T.t,fontSize:16,fontWeight:700,marginBottom:4}}>ยังไม่มีรายการ</div>
+              <div style={{color:T.m,fontSize:14,marginBottom:16}}>เริ่มต้นด้วยการเพิ่มรายการเบิก/คืนรายการแรก</div>
+              <button onClick={()=>{setShowForm(true);setTab("transactions");}} style={btnStyle(T.a,{padding:"12px 22px"})}>+ เพิ่มรายการแรก</button>
+            </div>}
           </div>
         </div>}
 
@@ -557,7 +620,7 @@ export default function App() {
               <div style={{fontSize:15,marginBottom:6,color:T.t}}>{t.item}</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}><CatB id={t.category}/><span style={{fontSize:13,color:T.d}}>{t.date}</span></div>
-                <div style={{display:"flex",gap:6}}><button onClick={()=>edit(t)} style={{background:T.s3,border:"none",borderRadius:8,padding:"6px 14px",color:T.a,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit"}}>แก้ไข</button><button onClick={()=>del(t.id)} style={{background:"#FEF2F2",border:"none",borderRadius:8,padding:"6px 14px",color:T.r,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit"}}>ลบ</button></div>
+                <div style={{display:"flex",gap:6}}><button onClick={()=>edit(t)} style={{background:T.s3,border:"none",borderRadius:10,minHeight:44,padding:"0 18px",color:T.a,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>แก้ไข</button><button onClick={()=>setConfirmDel(t)} style={{background:"#FEF2F2",border:"none",borderRadius:10,minHeight:44,padding:"0 18px",color:T.r,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>ลบ</button></div>
               </div>
             </div>
           ))}</div>
@@ -565,7 +628,7 @@ export default function App() {
             <thead><tr style={{background:T.s3}}>{["#","ประเภท","ชื่อ","วันที่","หมวดหมู่","รายการ","จำนวนเงิน","หมายเหตุ",""].map(h=><th key={h} style={{textAlign:"left",padding:"14px 12px",color:T.m,fontSize:13,fontWeight:700,borderBottom:`1px solid ${T.b}`}}>{h}</th>)}</tr></thead>
             <tbody>{filtered.map(t=><tr key={t.id} style={{transition:"background .15s",borderBottom:`1px solid ${T.b}08`}} onMouseEnter={e=>e.currentTarget.style.background=T.s3} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
               <td style={{padding:"12px",fontSize:13,color:T.d}}>{t.id}</td><td style={{padding:"12px"}}><Badge type={t.type}/></td><td style={{padding:"12px",fontSize:15,fontWeight:700}}>{t.person}</td><td style={{padding:"12px",fontSize:14,color:T.m}}>{t.date}</td><td style={{padding:"12px"}}><CatB id={t.category}/></td><td style={{padding:"12px",fontSize:14}}>{t.item}</td><td style={{padding:"12px",fontSize:16,fontWeight:800,color:t.type==="เบิก"?T.r:T.g}}>{t.type==="เบิก"?"−":"+"}{fmt(t.amount)}</td><td style={{padding:"12px",fontSize:13,color:T.d,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.note||"—"}</td>
-              <td style={{padding:"12px"}}><div style={{display:"flex",gap:4}}><button onClick={()=>edit(t)} style={{background:T.s3,border:"none",borderRadius:8,padding:"6px 14px",color:T.a,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit"}}>แก้ไข</button><button onClick={()=>del(t.id)} style={{background:"#FEF2F2",border:"none",borderRadius:8,padding:"6px 14px",color:T.r,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"inherit"}}>ลบ</button></div></td>
+              <td style={{padding:"12px"}}><div style={{display:"flex",gap:4}}><button onClick={()=>edit(t)} style={{background:T.s3,border:"none",borderRadius:10,minHeight:44,padding:"0 18px",color:T.a,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>แก้ไข</button><button onClick={()=>setConfirmDel(t)} style={{background:"#FEF2F2",border:"none",borderRadius:10,minHeight:44,padding:"0 18px",color:T.r,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>ลบ</button></div></td>
             </tr>)}</tbody></table></div>
             {filtered.length===0&&<div style={{textAlign:"center",padding:50,color:T.d,fontSize:16}}>ไม่พบรายการ</div>}
           </div>}
@@ -638,7 +701,9 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:14,marginBottom:16}}>
             <div style={card}>
               <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>สรุปตามบุคคล</div>
-              <ResponsiveContainer width="100%" height={mob?220:260}><BarChart data={byPerson} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke={T.b}/><XAxis type="number" stroke={T.d} fontSize={12} tickFormatter={v=>`${v/1000}k`}/><YAxis type="category" dataKey="name" stroke={T.d} fontSize={14} width={70}/><Tooltip content={<CTip/>}/><Legend/><Bar dataKey="เบิก" fill="#FCA5A5" radius={[0,6,6,0]} barSize={14}/><Bar dataKey="คืน" fill="#6EE7B7" radius={[0,6,6,0]} barSize={14}/></BarChart></ResponsiveContainer>
+              <Suspense fallback={<div className="sk" style={{height:mob?220:260}}/>}>
+                <Charts kind="personBar" data={byPerson} mob={mob} T={T} fmt={fmt}/>
+              </Suspense>
             </div>
             <div style={card}>
               <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>ยอดค้างสุทธิ</div>
@@ -653,20 +718,23 @@ export default function App() {
 
           <div style={card}>
             <div style={{fontWeight:700,fontSize:16,marginBottom:14}}>แนวโน้มงบคงเหลือ</div>
-            <ResponsiveContainer width="100%" height={mob?220:280}><AreaChart data={[{date:"เริ่มต้น",balance:budget},...balTime]}>
-              <defs><linearGradient id="gB2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.g} stopOpacity={.15}/><stop offset="100%" stopColor={T.g} stopOpacity={0}/></linearGradient></defs>
-              <CartesianGrid strokeDasharray="3 3" stroke={T.b}/><XAxis dataKey="date" stroke={T.d} fontSize={12} tickLine={false}/><YAxis stroke={T.d} fontSize={12} tickLine={false} tickFormatter={v=>`${(v/1e6).toFixed(1)}M`}/><Tooltip content={<CTip/>}/>
-              <Area type="stepAfter" dataKey="balance" stroke={T.g} strokeWidth={2.5} fill="url(#gB2)" name="คงเหลือ" dot={{fill:T.g,r:4}}/>
-            </AreaChart></ResponsiveContainer>
+            <Suspense fallback={<div className="sk" style={{height:mob?220:280}}/>}>
+              <Charts kind="balanceTrend" data={[{date:"เริ่มต้น",balance:budget},...balTime]} mob={mob} T={T} fmt={fmt}/>
+            </Suspense>
           </div>
         </div>}
       </main>
 
       <style>{`
         @keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
         @keyframes spin{to{transform:rotate(360deg)}}
         input:focus,textarea:focus,select:focus{border-color:${T.a}!important;outline:none;box-shadow:0 0 0 3px ${T.a}18}
         button:active{transform:scale(.98)}
+        button:focus-visible,a:focus-visible{outline:2px solid ${T.a};outline-offset:2px;border-radius:8px}
+        @keyframes shimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}
+        .sk{background:linear-gradient(90deg,${T.s3} 25%,#E9EEF5 50%,${T.s3} 75%);background-size:800px 100%;animation:shimmer 1.3s linear infinite;border-radius:12px}
+        @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
         ::selection{background:${T.a}22}
         select option{background:#fff;color:${T.t}}
       `}</style>
